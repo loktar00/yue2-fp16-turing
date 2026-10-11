@@ -7,9 +7,10 @@ Modified or added files (the diff is in `patches/fp16-turing.patch`):
 - `src/yue2/dtype.py` (new): reads `YUE2_DTYPE` (`float16` default, `bfloat16`, `float32`).
 - `src/yue2/pipeline.py`: the AR/NAR model is loaded with that dtype instead of hard-coded `torch.bfloat16`; the recorded `model_dtype` follows it.
 - `src/yue2/fast.py`: the optional vLLM backend uses the same dtype.
+- `src/yue2/cuda_graph.py`: on GPUs older than sm_80 the CUDA-graph decoder uses plain SDPA instead of PyTorch's FlashAttention / cuDNN attention kernels (which need Ampere or newer); `YUE2_ATTENTION` overrides the choice.
 - `pyproject.toml`: version `0.1.6+fp16turing1`.
 
-Not changed: attention (the model already uses `torch.nn.functional.scaled_dot_product_attention`, so no FlashAttention is needed), the VAE (already float32), sampling, tokenization, or weights.
+Not changed: the model's own attention (it already uses `torch.nn.functional.scaled_dot_product_attention`), the VAE (already float32), sampling, tokenization, or weights.
 
 Upstream's own tests were not vendored.
 

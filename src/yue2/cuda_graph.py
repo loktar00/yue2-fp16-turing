@@ -6,6 +6,7 @@ positions and cache slots. No vLLM, Triton, or custom extension is imported.
 """
 from __future__ import annotations
 from numbers import Integral
+import os
 
 import torch
 import torch.nn.functional as F
@@ -77,6 +78,12 @@ class GraphAR:
         # Torch 2.10 is pinned by the package. Its native variable-length FA
         # accepts GPU effective lengths; the public masked SDPA can select a
         # much slower math kernel. Keep a cuDNN/public-SDPA fallback explicit.
+        if attention_backend == "auto" and os.environ.get("YUE2_ATTENTION"):
+            attention_backend = os.environ["YUE2_ATTENTION"]
+        elif attention_backend == "auto" and torch.cuda.get_device_capability(self.device) < (8, 0):
+            # fp16-for-Turing patch: PyTorch's FlashAttention and cuDNN attention
+            # kernels need sm_80 or newer; plain SDPA (mem-efficient kernel) runs on sm_75.
+            attention_backend = "sdpa"
         if attention_backend == "auto":
             attention_backend = "flash" if flash else "cudnn" if fused and torch.backends.cudnn.is_available() else "sdpa"
         if attention_backend == "flash" and not flash:

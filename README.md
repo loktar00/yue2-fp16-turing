@@ -2,12 +2,12 @@
 
 A runnable setup of [YuE2](https://github.com/multimodal-art-projection/YuE), the open lyrics-to-song model, patched to run in **float16** so it works on **RTX 20-series (Turing, sm_75)** cards, which have no bfloat16 and no FlashAttention 2. It includes a small web UI and HTTP API: type a style and lyrics, get a full stereo song back as FLAC.
 
-Upstream hard-codes bfloat16. This repo changes that to a `YUE2_DTYPE` environment switch that defaults to `float16`. Nothing else in the model code is modified.
+Upstream hard-codes bfloat16. This repo changes that to a `YUE2_DTYPE` environment switch that defaults to `float16`. The only other change makes the CUDA-graph decoder fall back to plain SDPA on pre-Ampere cards.
 
 - Tested on: **RTX 2080 Ti 22 GB (modded), fp16**. Same-seed A/B against bf16 on an RTX 5090: fp16 generated cleanly and both sounded good.
 - Peak VRAM: about **7.8 GiB** in fp16 (measured on the 5090 run, so it should be the same on a 2080 Ti; the AR model is parked on the CPU while the VAE decodes). A 22 GB card has a lot of headroom.
 - A stock **11 GB 2080 Ti**: untested. It should fit on paper (upstream has a low-memory path), see [VRAM notes](#vram-notes).
-- Speed: about 0.3x real time on a 5090 (a 60 s song in ~18 s). Not measured on a 2080 Ti; expect it to be slower.
+- Speed: about 0.3x real time on a 5090 with FlashAttention (a 45 s song in ~16 s). Turing cannot use the fast attention kernels, so this repo selects plain SDPA there; forcing that path on the 5090 took ~1x real time. Not measured on a 2080 Ti; expect a few minutes per song.
 
 ## Credits and licenses
 
@@ -75,6 +75,7 @@ The service binds to `127.0.0.1`. `YUE2_HOST=0.0.0.0 scripts/run.sh` exposes it 
 | `YUE2_GPU` | `0` | which CUDA device to use |
 | `YUE2_MEMORY_BUDGET_GIB` | card size | VRAM budget handed to the pipeline |
 | `YUE2_OFFLOAD_AR` | `0` | `1` keeps the AR model on the CPU while decoding (low VRAM) |
+| `YUE2_ATTENTION` | auto | CUDA-graph attention kernel: `sdpa` (auto-selected on cards older than sm_80), `flash`, `cudnn` |
 | `YUE2_BACKEND` | `torch` | `torch-eager` disables CUDA graphs if they misbehave |
 | `YUE2_VERIFY_HASHES` | `1` | `0` skips the checksum pass over the weights on each load |
 | `YUE2_HOST`, `YUE2_PORT` | `127.0.0.1`, `5830` | listen address (used by `run.sh`) |
@@ -112,7 +113,7 @@ Every song is a **style** sentence plus a **lyrics** field. There are no tag lis
 ## Repo layout
 
 ```
-src/yue2/            vendored YuE2 inference package (fp16 patch: dtype.py, pipeline.py, fast.py)
+src/yue2/            vendored YuE2 inference package (fp16 patch: dtype.py, pipeline.py, fast.py, cuda_graph.py)
 service/             serve_yue2.py (FastAPI service) and index.html (web UI)
 scripts/             install.sh, run.sh, download_weights.py, check_gpu.py, make_song.py
 examples/            example request JSON, lyrics, and an instrumental request
