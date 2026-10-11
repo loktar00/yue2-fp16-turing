@@ -1,0 +1,13 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+outputs/
+yue2-out/
+hf-cache/
+*.safetensors
+*.flac
+*.wav
+*.log

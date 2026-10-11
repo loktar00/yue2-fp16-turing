@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>YuE2 song maker</title>
+<style>
+  :root { --bg:#101216; --panel:#181b21; --ink:#e8eaed; --dim:#9aa0a6; --line:#2a2f38; --accent:#6ea8fe; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f5f6f8; --panel:#fff; --ink:#1b1e23; --dim:#5f6670; --line:#d8dce2; --accent:#1a5fd0; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:15px/1.45 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 20px 16px 60px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--dim); margin: 0 0 16px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; margin-bottom: 14px; }
+  label { display:block; font-weight:600; margin: 10px 0 4px; }
+  label:first-child { margin-top: 0; }
+  textarea, input, select { width:100%; padding:8px; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--ink); font: inherit; }
+  textarea { min-height: 200px; font-family: ui-monospace, Consolas, monospace; }
+  #style { min-height: 64px; font-family: inherit; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; }
+  .row > div { flex:1 1 130px; }
+  .check { display:flex; align-items:center; gap:8px; margin-top:12px; font-weight:400; }
+  .check input { width:auto; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:6px; padding:10px 18px; font:inherit; font-weight:600; cursor:pointer; margin-top:14px; }
+  button:disabled { opacity:.5; cursor:wait; }
+  button.ghost { background:transparent; color:var(--ink); border:1px solid var(--line); margin-left:6px; }
+  #status { color: var(--dim); font-size: 13px; }
+  .hint { color: var(--dim); font-size: 13px; margin: 4px 0 0; }
+  .take { border-top:1px solid var(--line); padding: 10px 0; }
+  .take:first-child { border-top:0; }
+  .take audio { width:100%; margin-top:6px; }
+  .meta { color: var(--dim); font-size: 13px; }
+  #err { color:#e5534b; white-space:pre-wrap; }
+</style>
+</head>
+<body>
+<main>
+  <h1>YuE2 song maker</h1>
+  <p class="sub">One style sentence plus lyrics in, one full song out. <span id="status">checking service&hellip;</span></p>
+
+  <div class="panel">
+    <label for="style">Style (one sentence: language, genre, instruments, vocal character, BPM)</label>
+    <textarea id="style">English, warm piano pop, expressive female voice, acoustic piano, rounded bass and light drums, lyrical memorable melody, unhurried phrasing, 88 BPM</textarea>
+
+    <label for="lyrics">Lyrics</label>
+    <textarea id="lyrics">[Verse]
+Neon fades along the lane
+Footsteps keep the time of rain
+Fold the night and leave it here
+Morning has a sky to clear
+
+[Chorus]
+Let the day come into view
+Every road begins with you
+Hold a little room for light
+We will sing beyond the night</textarea>
+    <p class="hint">Every word in this box is sung, including words in [brackets]. Only the section tags themselves are structure.</p>
+
+    <label class="check"><input type="checkbox" id="instr"> Instrumental (sends bare [Instrumental] tags and ignores the lyrics box)</label>
+
+    <div class="row">
+      <div><label for="seed">Seed</label><input id="seed" type="number" value="831001"></div>
+      <div><label for="cot">Planning</label>
+        <select id="cot"><option value="full">full (chord score)</option><option value="melody">melody only</option><option value="off">off (fastest)</option></select></div>
+      <div><label for="sid">Name</label><input id="sid" value="song"></div>
+    </div>
+
+    <button id="go">Generate</button>
+    <button class="ghost" id="rand">Random seed</button>
+    <button class="ghost" id="unload">Unload model</button>
+    <p class="hint">The first song also loads the model (and downloads the weights on the very first run), so it takes a while. Song length is a lottery: the same lyrics can come out at 40 s or 4 minutes.</p>
+    <div id="err"></div>
+  </div>
+
+  <div class="panel" id="takes"><span class="meta">Songs from this session appear here. Files are also in the outputs folder.</span></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+async function health() {
+  try {
+    const h = await (await fetch('/health')).json();
+    const g = h.gpu ? h.gpu.name + ' ' + h.gpu.used_mib + '/' + h.gpu.total_mib + ' MiB' : 'GPU unknown';
+    $('status').textContent = h.status + ' - ' + h.dtype + ' - ' + g;
+  } catch (e) { $('status').textContent = 'service not reachable'; }
+}
+setInterval(health, 4000); health();
+$('rand').onclick = () => { $('seed').value = Math.floor(Math.random() * 1e6); };
+$('unload').onclick = async () => { await fetch('/unload', {method:'POST'}); health(); };
+$('go').onclick = async () => {
+  const btn = $('go'); btn.disabled = true; $('err').textContent = '';
+  const body = {
+    style: $('style').value, lyrics: $('lyrics').value, instrumental: $('instr').checked,
+    seed: parseInt($('seed').value || '0', 10), cot: $('cot').value, id: $('sid').value || 'song'
+  };
+  const t0 = Date.now();
+  const tick = setInterval(() => { btn.textContent = 'Working... ' + Math.round((Date.now() - t0) / 1000) + ' s'; }, 500);
+  try {
+    const r = await fetch('/v1/generate', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    const d = document.createElement('div'); d.className = 'take';
+    d.innerHTML = '<strong></strong> <span class="meta"></span><br><audio controls></audio> <a download>FLAC</a>';
+    d.querySelector('strong').textContent = j.job;
+    d.querySelector('.meta').textContent = j.duration_s + ' s of audio, made in ' + j.seconds + ' s, seed ' + j.seed + ', ' + j.dtype + ', peak ' + j.peak_vram_gib + ' GiB' + (Object.values(j.truncated || {}).some(Boolean) ? ', TRUNCATED' : '');
+    d.querySelector('audio').src = j.audio_url;
+    const a = d.querySelector('a'); a.href = j.flac_url;
+    const box = $('takes'); if (box.querySelector('.take') === null) box.textContent = '';
+    box.prepend(d);
+  } catch (e) { $('err').textContent = String(e.message || e); }
+  finally { clearInterval(tick); btn.disabled = false; btn.textContent = 'Generate'; health(); }
+};
+</script>
+</body>
+</html>

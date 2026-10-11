@@ -1,0 +1,93 @@
+diff --git a/src/yue2/dtype.py b/src/yue2/dtype.py
+new file mode 100644
+index 0000000..a1ada48
+--- /dev/null
++++ b/src/yue2/dtype.py
+@@ -0,0 +1,27 @@
++"""Model dtype selection (fp16-for-Turing patch, not part of upstream YuE2).
++
++Upstream hard-codes bfloat16, which Turing GPUs (RTX 20xx, sm_75) cannot run.
++This module reads the YUE2_DTYPE environment variable instead.
++
++    YUE2_DTYPE=float16    default in this repo; works on Turing and newer
++    YUE2_DTYPE=bfloat16   upstream behaviour; Ampere (RTX 30xx) and newer
++    YUE2_DTYPE=float32    slowest and ~2x the weight memory; a fallback if
++                          fp16 ever produces NaN / silent audio
++"""
++import os
++
++DEFAULT = "float16"
++CHOICES = ("float16", "bfloat16", "float32")
++
++
++def model_dtype_name():
++    value = os.environ.get("YUE2_DTYPE", DEFAULT).strip().lower()
++    value = {"fp16": "float16", "half": "float16", "bf16": "bfloat16", "fp32": "float32"}.get(value, value)
++    if value not in CHOICES:
++        raise ValueError("YUE2_DTYPE must be one of %s, got %r" % (", ".join(CHOICES), value))
++    return value
++
++
++def model_dtype():
++    import torch
++    return getattr(torch, model_dtype_name())
+diff --git a/src/yue2/fast.py b/src/yue2/fast.py
+index c9d2da6..9d474ab 100644
+--- a/src/yue2/fast.py
++++ b/src/yue2/fast.py
+@@ -25,6 +25,7 @@ import weakref
+ 
+ from .protocol import ABC_END, CODEC_OFFSET, CODEC_SIZE, CONTEXT, EOD, MUSIC_END, Sampling
+ from .storage import identity, model_identity, sha256_file, write_json
++from .dtype import model_dtype_name
+ 
+ WIRE = "YUE2_FAST\t"
+ PENALTY, WINDOW = "yue2_window_penalty", "yue2_penalty_window"
+@@ -50,7 +51,7 @@ def qwen_config(config):
+                   max_position_embeddings=config.get("max_position_embeddings", CONTEXT),
+                   tie_word_embeddings=False, attention_bias=False, attention_dropout=0.,
+                   use_sliding_window=False, sliding_window=None, max_window_layers=0,
+-                  torch_dtype="bfloat16")
++                  torch_dtype=model_dtype_name())
+     return output
+ 
+ 
+@@ -366,7 +367,7 @@ async def _worker_main():
+     if kv_bytes + weights_bytes + 3 * 2**30 > budget:
+         raise MemoryError("Requested vLLM memory budget cannot fit full-context BF16 AR+KV+3GiB reserve")
+     load_start = time.perf_counter()
+-    args = AsyncEngineArgs(model=str(derived), skip_tokenizer_init=True, dtype="bfloat16",
++    args = AsyncEngineArgs(model=str(derived), skip_tokenizer_init=True, dtype={"float16": "half"}.get(model_dtype_name(), model_dtype_name()),
+                            max_model_len=CONTEXT, max_num_seqs=1, max_num_batched_tokens=2048,
+                            enable_chunked_prefill=True, enable_prefix_caching=True,
+                            kv_cache_memory_bytes=kv_bytes,
+diff --git a/src/yue2/pipeline.py b/src/yue2/pipeline.py
+index 9b6fc43..41e1422 100644
+--- a/src/yue2/pipeline.py
++++ b/src/yue2/pipeline.py
+@@ -14,6 +14,7 @@ from .storage import resolve_model, model_identity, identity, write_json, collec
+ from .tokenization_yue2 import YuE2TextTokenizer
+ from .sampling import generate_tokens, synchronize
+ from .progress import Progress
++from .dtype import model_dtype, model_dtype_name
+ 
+ 
+ @dataclass
+@@ -214,7 +215,7 @@ class YuE2Pipeline:
+                 from .modeling_yue2 import YuE2ForCausalLM
+                 start = time.perf_counter()
+                 self._model = YuE2ForCausalLM.from_pretrained(self.model_dir, local_files_only=True,
+-                              torch_dtype=torch.bfloat16, low_cpu_mem_usage=True).eval()
++                              torch_dtype=model_dtype(), low_cpu_mem_usage=True).eval()
+                 self.load_timing["mot_load_seconds"] = time.perf_counter() - start
+             if self.quantization == "fp8" and not for_nar:
+                 from .quantization import prepare_fp8_ar
+@@ -368,7 +369,7 @@ class YuE2Pipeline:
+                 "cot": request.cot, "cfg_scale": request.guidance,
+                 "cfg_negative": "instruction_only" if request.cot == "off" else "same_instruction_and_exact_abc",
+                 "backend": self.backend, "quantization": self.quantization,
+-                "model_dtype": "bfloat16", "vae_dtype": "float32", "vae_decode": "halo_crop",
++                "model_dtype": model_dtype_name(), "vae_dtype": "float32", "vae_decode": "halo_crop",
+                 "vae_core_frames": self.vae_core_frames, "vae_halo_frames": 16,
+                 "device": str(self.device), "memory_budget_gib": self.memory_budget_gib,
+                 "offload_ar": self.offload_ar, "runtime_sha256": self.runtime_sha256,
